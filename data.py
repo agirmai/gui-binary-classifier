@@ -25,11 +25,12 @@ class DatasetBundle:
 class SplitBundle:
     name: str
     feature_names_2d: list[str]
-    target_names: list[str]
+    target_names: list[str]  # exactly 2 entries: [negative_label, positive_label]
+    positive_class: str  # the original class label treated as the positive (1) class
     X_train: np.ndarray
     X_test: np.ndarray
-    y_train: np.ndarray
-    y_test: np.ndarray
+    y_train: np.ndarray  # binary {0, 1}
+    y_test: np.ndarray  # binary {0, 1}
 
 
 def load_dataset(name: DatasetName) -> DatasetBundle:
@@ -54,20 +55,37 @@ def make_2d_split(
     feature_x: str,
     feature_y: str,
     *,
+    positive_class: str,
     test_size: float = 0.25,
     random_state: int = 42,
     stratify: bool = True,
     scale: bool = True,
 ) -> SplitBundle:
+    """
+    Build a stratified train/test split on two features and binarise the target.
+
+    The class named ``positive_class`` becomes label 1 (positive), and every other
+    class is collapsed into label 0 (negative). For natively-binary datasets this
+    is just a re-labelling; for multiclass datasets (Iris, Wine) this is a
+    one-vs-rest reduction so the rest of the app can treat every task uniformly
+    as a binary classification problem.
+    """
+    if positive_class not in bundle.target_names:
+        raise ValueError(
+            f"positive_class={positive_class!r} not in dataset classes "
+            f"{bundle.target_names!r}"
+        )
+    pos_idx = bundle.target_names.index(positive_class)
+
     fx_idx = bundle.feature_names.index(feature_x)
     fy_idx = bundle.feature_names.index(feature_y)
 
     X2 = bundle.X[:, [fx_idx, fy_idx]]
-    y = bundle.y
+    y_binary = (bundle.y == pos_idx).astype(int)
 
-    strat = y if stratify else None
+    strat = y_binary if stratify else None
     X_train, X_test, y_train, y_test = train_test_split(
-        X2, y, test_size=test_size, random_state=random_state, stratify=strat
+        X2, y_binary, test_size=test_size, random_state=random_state, stratify=strat
     )
 
     if scale:
@@ -75,10 +93,16 @@ def make_2d_split(
         X_train = scaler.fit_transform(X_train)
         X_test = scaler.transform(X_test)
 
+    negative_label = "rest" if len(bundle.target_names) > 2 else next(
+        n for n in bundle.target_names if n != positive_class
+    )
+    target_names = [negative_label, positive_class]
+
     return SplitBundle(
         name=bundle.name,
         feature_names_2d=[feature_x, feature_y],
-        target_names=bundle.target_names,
+        target_names=target_names,
+        positive_class=positive_class,
         X_train=X_train,
         X_test=X_test,
         y_train=y_train,

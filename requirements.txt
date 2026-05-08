@@ -4,3 +4,5 @@ numpy>=1.26
 pandas>=2.2
 matplotlib>=3.8
 graphviz>=0.20
+plotly>=5.20
+streamlit-plotly-events>=0.0.6

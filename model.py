@@ -3,8 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+import math
+
 import numpy as np
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 from sklearn.tree import DecisionTreeClassifier
 
 
@@ -12,6 +14,8 @@ from sklearn.tree import DecisionTreeClassifier
 class ModelResult:
     model: DecisionTreeClassifier
     accuracy: float
+    f1: float
+    roc_auc: float  # NaN when AUC is undefined (e.g. test set has a single class)
     depth: int
 
 
@@ -29,8 +33,14 @@ def train_decision_tree(
 
     y_pred = clf.predict(X_test)
     acc = float(accuracy_score(y_test, y_pred))
+    f1 = float(f1_score(y_test, y_pred, zero_division=0))
+    try:
+        y_proba = clf.predict_proba(X_test)[:, 1]
+        auc = float(roc_auc_score(y_test, y_proba))
+    except (ValueError, IndexError):
+        auc = math.nan
     depth = int(clf.get_depth())
-    return ModelResult(model=clf, accuracy=acc, depth=depth)
+    return ModelResult(model=clf, accuracy=acc, f1=f1, roc_auc=auc, depth=depth)
 
 
 def default_params() -> dict[str, Any]:

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 import matplotlib.pyplot as plt
 import numpy as np
+import plotly.graph_objects as go
 from sklearn.tree import DecisionTreeClassifier, export_graphviz
 
 
@@ -104,4 +105,159 @@ def tree_graphviz_source(
         special_characters=True,
     )
     return str(dot)
+
+
+@dataclass(frozen=True)
+class TreeLayout:
+    x: np.ndarray  # shape (n_nodes,)
+    y: np.ndarray  # shape (n_nodes,)
+    depth: np.ndarray  # shape (n_nodes,)
+
+
+def _compute_tree_depths(model: DecisionTreeClassifier) -> np.ndarray:
+    t = model.tree_
+    n = int(t.node_count)
+    depths = np.zeros(n, dtype=int)
+    stack = [(0, 0)]
+    while stack:
+        node, d = stack.pop()
+        depths[node] = d
+        left = int(t.children_left[node])
+        right = int(t.children_right[node])
+        if left != -1:
+            stack.append((left, d + 1))
+        if right != -1:
+            stack.append((right, d + 1))
+    return depths
+
+
+def compute_tree_layout(model: DecisionTreeClassifier) -> TreeLayout:
+    """
+    Deterministic 2D layout for a binary decision tree:
+    - y is -depth (root on top)
+    - x is leaf-order, with internal nodes centered over their children
+    """
+    t = model.tree_
+    n = int(t.node_count)
+
+    depths = _compute_tree_depths(model)
+    x = np.zeros(n, dtype=float)
+    y = -depths.astype(float)
+
+    next_leaf_x = 0.0
+
+    def dfs(node: int) -> None:
+        nonlocal next_leaf_x
+        left = int(t.children_left[node])
+        right = int(t.children_right[node])
+        is_leaf = left == -1 and right == -1
+        if is_leaf:
+            x[node] = next_leaf_x
+            next_leaf_x += 1.0
+            return
+        if left != -1:
+            dfs(left)
+        if right != -1:
+            dfs(right)
+        # center internal node between children
+        child_xs = []
+        if left != -1:
+            child_xs.append(x[left])
+        if right != -1:
+            child_xs.append(x[right])
+        x[node] = float(np.mean(child_xs)) if child_xs else next_leaf_x
+
+    dfs(0)
+    return TreeLayout(x=x, y=y, depth=depths)
+
+
+def interactive_tree_figure(
+    model: DecisionTreeClassifier,
+    *,
+    feature_names_2d: list[str],
+    class_names: list[str],
+) -> go.Figure:
+    """
+    Plotly tree graph with clickable nodes (via streamlit-plotly-events in app).
+    Each node carries customdata=node_id.
+    """
+    t = model.tree_
+    layout = compute_tree_layout(model)
+    n = int(t.node_count)
+
+    # Build edge segments
+    xs: list[float] = []
+    ys: list[float] = []
+    for node in range(n):
+        for child in (int(t.children_left[node]), int(t.children_right[node])):
+            if child == -1:
+                continue
+            xs += [layout.x[node], layout.x[child], None]
+            ys += [layout.y[node], layout.y[child], None]
+
+    edge_trace = go.Scatter(
+        x=xs,
+        y=ys,
+        mode="lines",
+        line=dict(color="rgba(120,120,120,0.7)", width=1),
+        hoverinfo="skip",
+        showlegend=False,
+    )
+
+    # Node labels
+    labels: list[str] = []
+    hover: list[str] = []
+    custom: list[int] = []
+
+    for node in range(n):
+        feat = int(t.feature[node])
+        thr = float(t.threshold[node])
+        impurity = float(t.impurity[node])
+        samples = int(t.n_node_samples[node])
+
+        is_leaf = (int(t.children_left[node]) == -1) and (int(t.children_right[node]) == -1)
+        if feat == -2 or is_leaf:
+            label = f"{node}"
+            split_txt = "leaf"
+        else:
+            fname = feature_names_2d[feat] if feat < len(feature_names_2d) else f"f{feat}"
+            label = f"{node}"
+            split_txt = f"{fname} ≤ {thr:.3g}"
+
+        labels.append(label)
+        hover.append(
+            "<br>".join(
+                [
+                    f"<b>node</b>: {node}",
+                    f"<b>split</b>: {split_txt}",
+                    f"<b>impurity</b>: {impurity:.4f}",
+                    f"<b>samples</b>: {samples}",
+                    "<i>Click to inspect</i>",
+                ]
+            )
+        )
+        custom.append(int(node))
+
+    node_trace = go.Scatter(
+        x=layout.x.tolist(),
+        y=layout.y.tolist(),
+        mode="markers+text",
+        text=labels,
+        textposition="middle center",
+        marker=dict(size=26, color="rgba(31,119,180,0.9)", line=dict(color="white", width=1)),
+        hovertext=hover,
+        hoverinfo="text",
+        customdata=custom,
+        showlegend=False,
+    )
+
+    fig = go.Figure(data=[edge_trace, node_trace])
+    fig.update_layout(
+        margin=dict(l=10, r=10, t=10, b=10),
+        xaxis=dict(visible=False),
+        yaxis=dict(visible=False),
+        height=520,
+        plot_bgcolor="white",
+    )
+    return fig
 
