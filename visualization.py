@@ -179,11 +179,43 @@ def interactive_tree_figure(
 ) -> go.Figure:
     """
     Plotly tree graph with clickable nodes (via streamlit-plotly-events in app).
-    Each node carries customdata=node_id.
+
+    Marker size and figure height are scaled by leaf count and tree depth so
+    larger trees (Titanic with one-hot features and ``max_depth=None``, etc.)
+    don't get crammed into a fixed-size canvas.
     """
     t = model.tree_
     layout = compute_tree_layout(model)
     n = int(t.node_count)
+
+    # Tree-shape stats used to size the figure.
+    if n > 0:
+        is_leaf_arr = np.fromiter(
+            (
+                (int(t.children_left[i]) == -1) and (int(t.children_right[i]) == -1)
+                for i in range(n)
+            ),
+            dtype=bool,
+            count=n,
+        )
+        n_leaves = int(is_leaf_arr.sum()) or 1
+        max_depth = int(layout.depth.max())
+    else:
+        n_leaves = 1
+        max_depth = 0
+
+    # Marker / font sizing: shrink as the leaf count grows so neighbouring
+    # nodes stop overlapping in a horizontally-fixed Streamlit container, but
+    # never below 18 px (~touch-target minimum) so individual nodes stay
+    # readable and clickable. For very wide trees (Titanic at full depth has
+    # ~300 leaves) some horizontal overlap is unavoidable; lower max_depth
+    # if you need a less crowded view.
+    marker_size = int(max(18, min(28, 800 / n_leaves)))
+    font_size = max(10, min(12, marker_size // 2 + 1))
+
+    # Vertical sizing: each level of depth gets ~80 px of room. Capped so the
+    # figure doesn't become unscrollable.
+    fig_height = int(max(520, min(1400, 90 * (max_depth + 1) + 40)))
 
     # Build edge segments
     xs: list[float] = []
@@ -244,7 +276,12 @@ def interactive_tree_figure(
         mode="markers+text",
         text=labels,
         textposition="middle center",
-        marker=dict(size=26, color="rgba(31,119,180,0.9)", line=dict(color="white", width=1)),
+        textfont=dict(size=font_size, color="white"),
+        marker=dict(
+            size=marker_size,
+            color="rgba(31,119,180,0.9)",
+            line=dict(color="white", width=1),
+        ),
         hovertext=hover,
         hoverinfo="text",
         customdata=custom,
@@ -252,11 +289,25 @@ def interactive_tree_figure(
     )
 
     fig = go.Figure(data=[edge_trace, node_trace])
+
+    # Tiny axis padding so leaves at the edges aren't half-clipped by the plot
+    # area, plus extra headroom at the top so the root marker has breathing space.
+    if n > 0:
+        x_min = float(layout.x.min())
+        x_max = float(layout.x.max())
+        y_min = float(layout.y.min())
+        y_max = float(layout.y.max())
+        x_pad = max(0.5, (x_max - x_min) * 0.02)
+        y_pad = max(0.5, (y_max - y_min) * 0.05)
+    else:
+        x_min = x_max = y_min = y_max = 0.0
+        x_pad = y_pad = 0.5
+
     fig.update_layout(
         margin=dict(l=10, r=10, t=10, b=10),
-        xaxis=dict(visible=False),
-        yaxis=dict(visible=False),
-        height=520,
+        xaxis=dict(visible=False, range=[x_min - x_pad, x_max + x_pad]),
+        yaxis=dict(visible=False, range=[y_min - y_pad, y_max + y_pad]),
+        height=fig_height,
         plot_bgcolor="white",
     )
     return fig
